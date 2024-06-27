@@ -59,7 +59,7 @@ var dependencies: [Package.Dependency] {
         [
             .package(
                 url: "https://github.com/apple/swift-collections",
-                from: "1.1.0"),
+                branch: "future"),
             .package(
                 url: "https://github.com/apple/swift-foundation-icu",
                 exact: "0.0.9"),
@@ -109,6 +109,7 @@ let package = Package(
             "FoundationMacros",
             .product(name: "_RopeModule", package: "swift-collections"),
             .product(name: "OrderedCollections", package: "swift-collections"),
+            .product(name: "Future", package: "swift-collections"),
           ],
           exclude: [
             "Formatting/CMakeLists.txt",
@@ -133,7 +134,8 @@ let package = Package(
           ],
           swiftSettings: [
             .enableExperimentalFeature("VariadicGenerics"),
-            .enableExperimentalFeature("AccessLevelOnImport")
+            .enableExperimentalFeature("AccessLevelOnImport"),
+            .enableExperimentalFeature("NonescapableTypes"),
           ] + availabilityMacros + concurrencyChecking
         ),
         .testTarget(
