@@ -24,6 +24,12 @@ extension String {
     static func _tryFromUTF8(_ input: Span<UInt8>) -> String? {
         input.withUnsafeBufferPointer(String._tryFromUTF8(_:))
     }
+
+    init<Encoding: _UnicodeEncoding>(
+        decoding codeUnits: Span<Encoding.CodeUnit>, as sourceEncoding: Encoding.Type
+    )  {
+        self = codeUnits.withUnsafeBufferPointer({ String(decoding: $0, as: Encoding.self) })
+    }
 }
 
 extension Data {
@@ -92,11 +98,11 @@ extension Span<UInt8> {
         extracting(Range(uncheckedBounds: (startOffset, sliceCount)))
     }
 
-    internal subscript(region: JSONMap.Region) -> Self {
+    internal func extracting(_ region: JSONMap.Region) -> Self {
         slice(from: region.startOffset, count: region.count)
     }
 
-    internal subscript(unchecked region: JSONMap.Region) -> Self {
+    internal func extracting(unchecked region: JSONMap.Region) -> Self {
         uncheckedSlice(from: region.startOffset, count: region.count)
     }
 }

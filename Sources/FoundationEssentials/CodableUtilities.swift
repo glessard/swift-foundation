@@ -340,6 +340,8 @@ internal extension Date {
 // Integer parsing conveniences
 //===----------------------------------------------------------------------===//
 
+import Future
+
 internal
 func _parseIntegerDigits<Result: FixedWidthInteger>(
     _ codeUnits: BufferView<UInt8>, isNegative: Bool
@@ -373,6 +375,38 @@ func _parseIntegerDigits<Result: FixedWidthInteger>(
 }
 
 internal
+func _parseIntegerDigits<Result: FixedWidthInteger>(
+    _ codeUnits: Span<UInt8>, isNegative: Bool
+) -> Result? {
+    guard _fastPath(!codeUnits.isEmpty) else { return nil }
+
+    // ASCII constants, named for clarity:
+    let _0 = 48 as UInt8
+
+    let numericalUpperBound: UInt8 = _0 &+ 10
+    let multiplicand: Result = 10
+    var result: Result = 0
+
+    for i in 0..<codeUnits.count {
+        let digit = codeUnits[unchecked: i]
+        let digitValue: Result
+        if _fastPath(digit >= _0 && digit < numericalUpperBound) {
+            digitValue = Result(truncatingIfNeeded: digit &- _0)
+        } else {
+            return nil
+        }
+        let overflow1: Bool
+        (result, overflow1) = result.multipliedReportingOverflow(by: multiplicand)
+        let overflow2: Bool
+        (result, overflow2) = isNegative
+        ? result.subtractingReportingOverflow(digitValue)
+        : result.addingReportingOverflow(digitValue)
+        guard _fastPath(!overflow1 && !overflow2) else { return nil }
+    }
+    return result
+}
+
+internal
 func _parseHexIntegerDigits<Result: FixedWidthInteger>(
     _ codeUnits: BufferView<UInt8>, isNegative: Bool
 ) -> Result? {
@@ -388,6 +422,45 @@ func _parseHexIntegerDigits<Result: FixedWidthInteger>(
 
     var result = 0 as Result
     for digit in codeUnits {
+        let digitValue: Result
+        if _fastPath(digit >= _0 && digit < numericalUpperBound) {
+            digitValue = Result(truncatingIfNeeded: digit &- _0)
+        } else if _fastPath(digit >= _A && digit < uppercaseUpperBound) {
+            digitValue = Result(truncatingIfNeeded: digit &- _A &+ 10)
+        } else if _fastPath(digit >= _a && digit < lowercaseUpperBound) {
+            digitValue = Result(truncatingIfNeeded: digit &- _a &+ 10)
+        } else {
+            return nil
+        }
+
+        let overflow1: Bool
+        (result, overflow1) = result.multipliedReportingOverflow(by: multiplicand)
+        let overflow2: Bool
+        (result, overflow2) = isNegative
+        ? result.subtractingReportingOverflow(digitValue)
+        : result.addingReportingOverflow(digitValue)
+        guard _fastPath(!overflow1 && !overflow2) else { return nil }
+    }
+    return result
+}
+
+internal
+func _parseHexIntegerDigits<Result: FixedWidthInteger>(
+    _ codeUnits: borrowing Span<UInt8>, isNegative: Bool
+) -> Result? {
+    guard _fastPath(!codeUnits.isEmpty) else { return nil }
+
+    // ASCII constants, named for clarity:
+    let _0 = 48 as UInt8, _A = 65 as UInt8, _a = 97 as UInt8
+
+    let numericalUpperBound = _0 &+ 10
+    let uppercaseUpperBound = _A &+ 6
+    let lowercaseUpperBound = _a &+ 6
+    let multiplicand: Result = 16
+
+    var result = 0 as Result
+    for i in 0..<codeUnits.count {
+        let digit = codeUnits[unchecked: i]
         let digitValue: Result
         if _fastPath(digit >= _0 && digit < numericalUpperBound) {
             digitValue = Result(truncatingIfNeeded: digit &- _0)
@@ -684,3 +757,21 @@ extension BufferView where Element == UInt8 {
     }
 }
 
+extension Span where Element == UInt8 {
+    internal func _decodeScalar() -> (Unicode.Scalar?, scalarLength: Int) {
+        let cu0 = self[unchecked: 0]
+        guard let len = _utf8ScalarLength(cu0), self.count >= len else { return (nil, 0) }
+        switch len {
+        case 1:
+            return (_decodeUTF8(cu0), len)
+        case 2:
+            return (_decodeUTF8(cu0, self[unchecked: 1]), len)
+        case 3:
+            return (_decodeUTF8(cu0, self[unchecked: 1], self[unchecked: 2]), len)
+        case 4:
+            return (_decodeUTF8(cu0, self[unchecked: 1], self[unchecked: 2], self[unchecked: 3]), len)
+        default:
+            fatalError()
+        }
+    }
+}
