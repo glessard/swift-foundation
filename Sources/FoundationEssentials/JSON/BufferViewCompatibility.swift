@@ -10,6 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+import Future
+
 extension String {
     static func _tryFromUTF8(_ input: BufferView<UInt8>) -> String? {
         input.withUnsafePointer { pointer, capacity in
@@ -18,13 +20,17 @@ extension String {
     }
 }
 
+extension String {
+    static func _tryFromUTF8(_ input: Span<UInt8>) -> String? {
+        input.withUnsafeBufferPointer(String._tryFromUTF8(_:))
+    }
+}
+
 extension Data {
     init(bufferView: BufferView<UInt8>) {
-        self = bufferView.withUnsafeBufferPointer {
-            Data(buffer: $0)
-        }
+        self = bufferView.withUnsafeBufferPointer(Data.init(buffer:))
     }
-    
+
     func withBufferView<ResultType>(
         _ body: (BufferView<UInt8>) throws -> ResultType
     ) rethrows -> ResultType {
@@ -35,25 +41,62 @@ extension Data {
     }
 }
 
+extension Data {
+    init(span: Span<UInt8>) {
+        self = span.withUnsafeBufferPointer(Data.init(buffer:))
+    }
+
+    func withSpan<ResultType>(
+        _ body: (Span<UInt8>) throws -> ResultType
+    ) rethrows -> ResultType {
+        try withUnsafeBytes {
+            // Data never passes an empty buffer with a `nil` `baseAddress`.
+            try body(Span(unsafeBytes: $0, owner: self))
+        }
+    }
+}
+
 extension BufferView<UInt8> {
-    internal func slice(from startOffset: Int, count sliceCount: Int) -> BufferView {
+    internal func slice(from startOffset: Int, count sliceCount: Int) -> Self {
         precondition(
             startOffset >= 0 && startOffset < count && sliceCount >= 0
                 && sliceCount <= count && startOffset &+ sliceCount <= count
         )
         return uncheckedSlice(from: startOffset, count: sliceCount)
     }
-    
-    internal func uncheckedSlice(from startOffset: Int, count sliceCount: Int) -> BufferView {
+
+    internal func uncheckedSlice(from startOffset: Int, count sliceCount: Int) -> Self {
         let address = startIndex.advanced(by: startOffset)
         return BufferView(start: address, count: sliceCount)
     }
     
-    internal subscript(region: JSONMap.Region) -> BufferView {
+    internal subscript(region: JSONMap.Region) -> Self {
         slice(from: region.startOffset, count: region.count)
     }
 
-    internal subscript(unchecked region: JSONMap.Region) -> BufferView {
+    internal subscript(unchecked region: JSONMap.Region) -> Self {
+        uncheckedSlice(from: region.startOffset, count: region.count)
+    }
+}
+
+extension Span<UInt8> {
+    internal func slice(from startOffset: Int, count sliceCount: Int) -> Self {
+        precondition(
+            startOffset >= 0 && startOffset < count && sliceCount >= 0
+                && sliceCount <= count && startOffset &+ sliceCount <= count
+        )
+        return uncheckedSlice(from: startOffset, count: sliceCount)
+    }
+
+    internal func uncheckedSlice(from startOffset: Int, count sliceCount: Int) -> Self {
+        extracting(Range(uncheckedBounds: (startOffset, sliceCount)))
+    }
+
+    internal subscript(region: JSONMap.Region) -> Self {
+        slice(from: region.startOffset, count: region.count)
+    }
+
+    internal subscript(unchecked region: JSONMap.Region) -> Self {
         uncheckedSlice(from: region.startOffset, count: region.count)
     }
 }
