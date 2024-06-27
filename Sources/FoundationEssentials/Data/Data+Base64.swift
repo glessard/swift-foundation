@@ -10,6 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+import Future
+
 private enum Base64Error: Error {
     case invalidElementCount
     case cannotDecode
@@ -36,7 +38,7 @@ extension Data {
         var encoded = base64String
         let decoded = encoded.withUTF8 {
             // String won't pass an empty buffer with a `nil` `baseAddress`.
-            Data(decodingBase64: BufferView(unsafeBufferPointer: $0)!, options: options)
+            Data(decodingBase64: Span<UInt8>(unsafeElements: $0, owner: base64String), options: options)
         }
         guard let decoded else { return nil }
         self = decoded
@@ -57,7 +59,7 @@ extension Data {
             return nil
         }
 #else
-        let decoded = base64Data.withBufferView {
+        let decoded = base64Data.withSpan {
             Data(decodingBase64: $0, options: options)
         }
         guard let decoded else { return nil }
@@ -65,7 +67,7 @@ extension Data {
 #endif
     }
 
-    init?(decodingBase64 bytes: borrowing BufferView<UInt8>, options: Base64DecodingOptions = []) {
+    init?(decodingBase64 bytes: borrowing Span<UInt8>, options: Base64DecodingOptions = []) {
         guard bytes.count.isMultiple(of: 4) || options.contains(.ignoreUnknownCharacters)
         else { return nil }
 
@@ -102,7 +104,7 @@ extension Data {
 #else
         if self.isEmpty { return "" }
 
-        return self.withBufferView { inputBuffer in
+        return self.withSpan { inputBuffer in
             let capacity = Self.estimateBase64Size(length: self.count)
             return String(utf8Capacity: capacity) {
                 Self.base64EncodeBytes(inputBuffer, &$0, options: options)
@@ -127,7 +129,7 @@ extension Data {
         let dataLength = self.count
         if dataLength == 0 { return Data() }
 
-        return self.withBufferView { inputBuffer in
+        return self.withSpan { inputBuffer in
             let capacity = Self.estimateBase64Size(length: dataLength)
             return Data(capacity: capacity) {
                 Self.base64EncodeBytes(inputBuffer, &$0, options: options)
@@ -160,7 +162,7 @@ extension Data {
      - throws:               When decoding fails
      */
     static func base64DecodeBytes(
-        _ bytes: borrowing BufferView<UInt8>, _ output: inout OutputBuffer<UInt8>, options: Base64DecodingOptions = []
+        _ bytes: borrowing Span<UInt8>, _ output: inout OutputBuffer<UInt8>, options: Base64DecodingOptions = []
     ) throws {
         guard bytes.count.isMultiple(of: 4) || options.contains(.ignoreUnknownCharacters)
         else { throw Base64Error.invalidElementCount }
@@ -190,7 +192,8 @@ extension Data {
         var paddingCount = 0
         var index = 0
 
-        for base64Char in bytes {
+        for i in bytes._indices {
+            let base64Char = bytes[unchecked: i]
             var value: UInt8 = 0
 
             var invalid = false
@@ -253,12 +256,12 @@ extension Data {
     /**
      This method encodes data in Base64.
 
-     - parameter dataBuffer: A BufferView of the bytes to encode
+     - parameter dataBuffer: A Span of the bytes to encode
      - parameter options:    Options for formatting the result
      - parameter buffer:     The buffer to write the bytes into
      */
     static func base64EncodeBytes(
-        _ dataBuffer: BufferView<UInt8>, _ buffer: inout OutputBuffer<UInt8>, options: Base64EncodingOptions = []
+        _ dataBuffer: Span<UInt8>, _ buffer: inout OutputBuffer<UInt8>, options: Base64EncodingOptions = []
     ) {
         // Use a StaticString for lookup of values 0-63 -> ASCII values
         let base64Chars = StaticString("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
@@ -307,15 +310,15 @@ extension Data {
 
         while bytesLeft > 0 {
 
-            let byte1 = dataBuffer[offset: inputIndex]
+            let byte1 = dataBuffer[inputIndex]
 
             // outputBytes is a UInt32 to allow 4 bytes to be written out at once.
             var outputBytes = lookupBase64Value(UInt16(byte1 >> 2))
 
             if bytesLeft > 2 {
                 // This is the main loop converting 3 bytes at a time.
-                let byte2 = dataBuffer[offset: inputIndex + 1]
-                let byte3 = dataBuffer[offset: inputIndex + 2]
+                let byte2 = dataBuffer[inputIndex &+ 1]
+                let byte3 = dataBuffer[inputIndex &+ 2]
                 var value = UInt16(byte1 & 0x3) << 8
                 value |= UInt16(byte2)
 
@@ -332,7 +335,7 @@ extension Data {
             } else {
                 // This runs once at the end of there were 1 or 2 bytes left, byte1 having already been read.
                 // Read byte2 or 0 if there isnt another byte
-                let byte2 = bytesLeft == 1 ? 0 : dataBuffer[offset: inputIndex + 1]
+                let byte2 = bytesLeft == 1 ? 0 : dataBuffer[inputIndex &+ 1]
                 var value = UInt16(byte1 & 0x3) << 8
                 value |= UInt16(byte2)
 
