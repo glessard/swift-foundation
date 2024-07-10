@@ -348,6 +348,11 @@ internal struct JSONScanner: ~Escapable {
         self.reader = DocumentReader(bytes: copy bytes)
     }
 
+    init(reader: consuming DocumentReader, options: Options) -> dependsOn(reader) Self {
+        self.options = options
+        self.reader = reader
+    }
+
     mutating func scan() throws -> JSONMap {
         if options.assumesTopLevelDictionary {
             switch try reader.consumeWhitespace(allowingEOF: true) {
