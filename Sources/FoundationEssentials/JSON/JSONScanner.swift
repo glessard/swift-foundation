@@ -380,7 +380,8 @@ internal struct JSONScanner: ~Escapable {
             }
         }
 
-        let map = JSONMap(mapBuffer: partialMap.mapData, dataBuffer: self.reader.bytes)
+        let map = reader.createMap(from: partialMap)
+        // JSONMap(mapBuffer: partialMap.mapData, dataBuffer: self.reader.bytes)
 
         // If the input contains only a number, we have to copy the input into a form that is guaranteed to have a trailing NUL byte so that strtod doesn't perform a buffer overrun.
         if case .number = map.loadValue(at: 0)! {
@@ -638,8 +639,10 @@ extension JSONScanner {
             index
         }
 
-        @inline(__always)
-        var byteCount: Int { bytes.count }
+        func createMap(from partialMap: JSONPartialMapData) -> JSONMap {
+          // Isn't this an obvious escape?
+          JSONMap(mapBuffer: partialMap.mapData, dataBuffer: bytes)
+        }
 
         init(bytes: borrowing Span<UInt8>) {
             self.bytes = copy bytes
