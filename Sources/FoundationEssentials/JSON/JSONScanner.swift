@@ -345,12 +345,7 @@ internal struct JSONScanner: ~Escapable {
 
     init(bytes: borrowing Span<UInt8>, options: Options) {
         self.options = options
-        self.reader = DocumentReader(bytes: copy bytes)
-    }
-
-    init(reader: consuming DocumentReader, options: Options) -> dependsOn(reader) Self {
-        self.options = options
-        self.reader = reader
+        self.reader = JSONScanner.DocumentReader(bytes: bytes)
     }
 
     mutating func scan() throws -> JSONMap {
@@ -612,7 +607,7 @@ extension JSONScanner {
     struct DocumentReader: ~Escapable {
         private let bytes: Span<UInt8>
         private(set) var readIndex : Int
-        let endIndex : Int
+        var endIndex: Int { bytes.count }
 
         @inline(__always)
         func checkRemainingBytes(_ count: Int) -> Bool {
@@ -644,15 +639,14 @@ extension JSONScanner {
             index
         }
 
-        func createMap(from partialMap: JSONPartialMapData) -> JSONMap {
-          // Isn't this an obvious escape?
-          JSONMap(mapBuffer: partialMap.mapData, dataBuffer: bytes)
-        }
-
         init(bytes: borrowing Span<UInt8>) {
             self.bytes = copy bytes
-            self.readIndex = bytes.startIndex
-            self.endIndex = bytes.endIndex
+            self.readIndex = 0
+        }
+
+        func createMap(from partialMap: JSONPartialMapData) -> JSONMap {
+            // Isn't this an obvious escape?
+            JSONMap(mapBuffer: partialMap.mapData, dataBuffer: bytes)
         }
 
         @inline(__always)

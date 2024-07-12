@@ -39,7 +39,7 @@ internal struct JSON5Scanner: ~Escapable {
             if currentCount > 0, currentCount.isMultiple(of: 2048) {
                 // Time to predict how big these arrays are going to be based on the current rate of consumption per processed bytes.
                 // total objects = (total bytes / current bytes) * current objects
-                let totalBytes = reader.bytes.count
+                let totalBytes = reader.endIndex
                 let consumedBytes = reader.byteOffset(at: reader.readIndex)
                 let ratio = (Double(totalBytes) / Double(consumedBytes))
                 let totalExpectedMapSize = Int( Double(mapData.count) * ratio )
@@ -97,7 +97,7 @@ internal struct JSON5Scanner: ~Escapable {
 
     init(bytes: borrowing Span<UInt8>, options: Options) {
         self.options = options
-        self.reader = DocumentReader(bytes: copy bytes)
+        self.reader = JSON5Scanner.DocumentReader(bytes: bytes)
     }
 
     mutating func scan() throws -> JSONMap {
@@ -125,7 +125,8 @@ internal struct JSON5Scanner: ~Escapable {
             throw JSONError.unexpectedCharacter(context: "after top-level value", ascii: char, location: reader.sourceLocation)
         }
 
-        return JSONMap(mapBuffer: partialMap.mapData, dataBuffer: self.reader.bytes)
+        return reader.createMap(from: partialMap)
+        // JSONMap(mapBuffer: partialMap.mapData, dataBuffer: self.reader.bytes)
     }
 
     // MARK: Generic Value Scanning
@@ -369,9 +370,9 @@ internal struct JSON5Scanner: ~Escapable {
 extension JSON5Scanner {
 
     struct DocumentReader: ~Escapable {
-        let bytes: Span<UInt8>
+        private let bytes: Span<UInt8>
         private(set) var readIndex : Int
-        private let endIndex : Int
+        var endIndex: Int { bytes.count }
 
         @inline(__always)
         func checkRemainingBytes(_ count: Int) -> Bool {
@@ -403,10 +404,14 @@ extension JSON5Scanner {
             index
         }
 
-        init(bytes: Span<UInt8>) {
-            self.bytes = bytes
+        init(bytes: borrowing Span<UInt8>) {
+            self.bytes = copy bytes
             self.readIndex = bytes.startIndex
-            self.endIndex = bytes.endIndex
+        }
+
+        func createMap(from partialMap: JSONPartialMapData) -> JSONMap {
+            // Isn't this an obvious escape?
+            JSONMap(mapBuffer: partialMap.mapData, dataBuffer: bytes)
         }
 
         @inline(__always)
