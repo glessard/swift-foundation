@@ -63,6 +63,8 @@ internal import _CShims
 
 import Future
 
+private let invalid = UnsafePointer<UInt8>(bitPattern: 0xfaffab1e)!
+
 internal class JSONMap {
     enum TypeDescriptor : Int {
         case string  // [marker, count, sourceByteOffset]
@@ -106,7 +108,9 @@ internal class JSONMap {
         self.mapBuffer = mapBuffer
         //FIXME: find a better solution than this ugly escape
         self.dataLock = dataBuffer.withUnsafeBufferPointer {
-            LockedState(initialState: (start: $0.baseAddress!, count: $0.count, allocation: nil))
+            LockedState(
+              initialState: (start: $0.baseAddress ?? invalid, count: $0.count, allocation: nil)
+            )
         }
     }
 
