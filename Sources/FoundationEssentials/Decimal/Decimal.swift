@@ -265,6 +265,7 @@ extension Decimal {
 
     @_specialize(where UTF8Collection == String.UTF8View)
     @_specialize(where UTF8Collection == BufferView<UInt8>)
+    @_specialize(where UTF8Collection == UnsafeBufferPointer<UInt8>)
     internal static func _decimal<UTF8Collection: Collection>(
         from utf8View: UTF8Collection,
         decimalSeparator: String.UTF8View = ".".utf8,

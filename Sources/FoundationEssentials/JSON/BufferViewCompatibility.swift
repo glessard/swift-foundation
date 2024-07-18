@@ -24,6 +24,20 @@ extension String {
     static func _tryFromUTF8(_ input: Span<UInt8>) -> String? {
         input.withUnsafeBufferPointer(String._tryFromUTF8(_:))
     }
+
+    init<Encoding: _UnicodeEncoding>(
+        decoding codeUnits: Span<Encoding.CodeUnit>, as sourceEncoding: Encoding.Type
+    ) {
+        self = codeUnits.withUnsafeBufferPointer({ String(decoding: $0, as: Encoding.self) })
+    }
+
+    public init?(bytes: borrowing Span<UInt8>, encoding: Encoding) {
+        let decoded = bytes.withUnsafeBufferPointer {
+            String(bytes: $0, encoding: encoding)
+        }
+        guard let decoded else { return nil }
+        self = decoded
+    }
 }
 
 extension Data {
@@ -80,23 +94,10 @@ extension BufferView<UInt8> {
 }
 
 extension Span<UInt8> {
-    internal func slice(from startOffset: Int, count sliceCount: Int) -> Self {
-        precondition(
-            startOffset >= 0 && startOffset < count && sliceCount >= 0
-                && sliceCount <= count && startOffset &+ sliceCount <= count
-        )
-        return uncheckedSlice(from: startOffset, count: sliceCount)
-    }
-
-    internal func uncheckedSlice(from startOffset: Int, count sliceCount: Int) -> Self {
-        extracting(Range(uncheckedBounds: (startOffset, sliceCount)))
-    }
-
-    internal subscript(region: JSONMap.Region) -> Self {
-        slice(from: region.startOffset, count: region.count)
-    }
-
-    internal subscript(unchecked region: JSONMap.Region) -> Self {
-        uncheckedSlice(from: region.startOffset, count: region.count)
+    internal func extracting(_ region: JSONMap.Region) -> Self {
+        let start = region.startOffset
+        let bounds = start..<(start &+ region.count)
+        assertValidity(bounds)
+        return extracting(unchecked: bounds)
     }
 }

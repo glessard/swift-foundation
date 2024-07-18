@@ -61,6 +61,8 @@ import Glibc
 
 internal import _FoundationCShims
 
+import Future
+
 internal class JSONMap {
     enum TypeDescriptor : Int {
         case string  // [marker, count, sourceByteOffset]
@@ -98,11 +100,16 @@ internal class JSONMap {
     }
 
     let mapBuffer : [Int]
-    var dataLock : LockedState<(buffer: BufferView<UInt8>, allocation: UnsafeRawPointer?)>
+    var dataLock : LockedState<(start: UnsafePointer<UInt8>?, count: Int, allocation: UnsafePointer<UInt8>?)>
 
-    init(mapBuffer: [Int], dataBuffer: BufferView<UInt8>) {
+    init(mapBuffer: [Int], dataBuffer: Span<UInt8>) {
         self.mapBuffer = mapBuffer
-        self.dataLock = .init(initialState: (buffer: dataBuffer, allocation: nil))
+        //FIXME: find a better solution than this ugly escape
+        self.dataLock = dataBuffer.withUnsafeBufferPointer {
+            LockedState(
+              initialState: (start: $0.baseAddress, count: $0.count, allocation: nil)
+            )
+        }
     }
 
     func copyInBuffer() {
@@ -111,33 +118,42 @@ internal class JSONMap {
                 return
             }
 
-            // Allocate an additional byte to ensure we have a trailing NUL byte which is important for cases like a floating point number fragment.
-            let (p, c) = state.buffer.withUnsafeRawPointer {
-                pointer, capacity -> (UnsafeRawPointer, Int) in
-                let raw = UnsafeMutableRawPointer.allocate(byteCount: capacity+1, alignment: 1)
-                raw.copyMemory(from: pointer, byteCount: capacity)
-                raw.storeBytes(of: UInt8.zero, toByteOffset: capacity, as: UInt8.self)
-                return (.init(raw), capacity+1)
+            let span = Span<UInt8>(
+                unsafeElements: .init(start: state.start, count: state.count),
+                owner: state
+            )
+            let (p, c) = span.withUnsafeBufferPointer {
+                buffer -> (UnsafePointer<UInt8>, Int) in
+                // Allocate an additional byte to ensure we have a trailing NUL byte which is important for cases like a floating point number fragment.
+                let new = UnsafeMutableBufferPointer<UInt8>.allocate(capacity: buffer.count+1)
+                let after = new.update(fromContentsOf: buffer)
+                assert(after == buffer.count)
+                new[after] = 0
+                return (.init(new.baseAddress!), after&+1)
             }
 
-            state = (buffer: .init(unsafeBaseAddress: p, count: c), allocation: p)
+            state = (start: p, count: c, allocation: p)
         }
     }
 
 
     @inline(__always)
-    func withBuffer<T>(
-      for region: Region, perform closure: @Sendable (_ jsonBytes: BufferView<UInt8>, _ fullSource: BufferView<UInt8>) throws -> T
+    func withSpan<T>(
+        for region: Region, perform closure: @Sendable (_ jsonBytes: Span<UInt8>, _ fullSource: Span<UInt8>) throws -> T
     ) rethrows -> T {
-        try dataLock.withLock {
-            return try closure($0.buffer[region], $0.buffer)
+        try dataLock.withLock { state in
+            let span = Span<UInt8>(
+                unsafeElements: .init(start: state.start, count: state.count),
+                owner: state
+            )
+            return try closure(span.extracting(region), span)
         }
     }
 
     deinit {
         dataLock.withLock {
             if let allocatedPointer = $0.allocation {
-                precondition($0.buffer.startIndex == BufferViewIndex(rawValue: allocatedPointer))
+                precondition($0.start == allocatedPointer)
                 allocatedPointer.deallocate()
             }
         }
@@ -260,9 +276,9 @@ extension JSONMap.Value {
 
 
 
-internal struct JSONScanner {
+internal struct JSONScanner: ~Escapable {
     let options: Options
-    var reader: DocumentReader
+    private var reader: DocumentReader
     var depth: Int = 0
     var partialMap = JSONPartialMapData()
 
@@ -279,8 +295,8 @@ internal struct JSONScanner {
             if currentCount > 0, currentCount.isMultiple(of: 2048) {
                 // Time to predict how big these arrays are going to be based on the current rate of consumption per processed bytes.
                 // total objects = (total bytes / current bytes) * current objects
-                let totalBytes = reader.bytes.count
-                let consumedBytes = reader.byteOffset(at: reader.readIndex)
+                let totalBytes = reader.endIndex
+                let consumedBytes = reader.readIndex
                 let ratio = (Double(totalBytes) / Double(consumedBytes))
                 let totalExpectedMapSize = Int( Double(mapData.count) * ratio )
                 if prevMapDataSize == 0 || Double(totalExpectedMapSize) / Double(prevMapDataSize) > 1.25 {
@@ -335,9 +351,9 @@ internal struct JSONScanner {
         }
     }
 
-    init(bytes: BufferView<UInt8>, options: Options) {
+    init(bytes: Span<UInt8>, options: Options) {
         self.options = options
-        self.reader = DocumentReader(bytes: bytes)
+        self.reader = JSONScanner.DocumentReader(bytes: bytes)
     }
 
     mutating func scan() throws -> JSONMap {
@@ -372,7 +388,7 @@ internal struct JSONScanner {
             }
         }
 
-        let map = JSONMap(mapBuffer: partialMap.mapData, dataBuffer: self.reader.bytes)
+        let map = reader.jsonMap(from: partialMap)
 
         // If the input contains only a number, we have to copy the input into a form that is guaranteed to have a trailing NUL byte so that strtod doesn't perform a buffer overrun.
         if case .number = map.loadValue(at: 0)! {
@@ -567,7 +583,7 @@ internal struct JSONScanner {
         precondition(shouldBePostQuote == ._quote)
 
         // skip initial quote
-        return partialMap.record(tagType: isSimple ? .simpleString : .string, count: reader.distance(from: start, to: end), dataOffset: reader.byteOffset(at: start), with: reader)
+        return partialMap.record(tagType: isSimple ? .simpleString : .string, count: reader.distance(from: start, to: end), dataOffset: start, with: reader)
     }
 
     mutating func scanNumber() throws {
@@ -575,7 +591,7 @@ internal struct JSONScanner {
         var containsExponent = false
         reader.skipNumber(containsExponent: &containsExponent)
         let end = reader.readIndex
-        return partialMap.record(tagType: containsExponent ? .numberContainingExponent : .number, count: reader.distance(from: start, to: end), dataOffset: reader.byteOffset(at: start), with: reader)
+        return partialMap.record(tagType: containsExponent ? .numberContainingExponent : .number, count: reader.distance(from: start, to: end), dataOffset: start, with: reader)
     }
 
     mutating func scanBool() throws {
@@ -595,14 +611,14 @@ internal struct JSONScanner {
 
 extension JSONScanner {
 
-    struct DocumentReader {
-        let bytes: BufferView<UInt8>
-        private(set) var readIndex : BufferViewIndex<UInt8>
-        private let endIndex : BufferViewIndex<UInt8>
+    struct DocumentReader: ~Escapable {
+        private let bytes: Span<UInt8>
+        private(set) var readIndex: Int = 0
+        var endIndex: Int { bytes.count }
 
         @inline(__always)
         func checkRemainingBytes(_ count: Int) -> Bool {
-          bytes.distance(from: readIndex, to: endIndex) >= count
+          (endIndex &- readIndex) >= count
         }
 
         @inline(__always)
@@ -617,7 +633,7 @@ extension JSONScanner {
         }
 
         func sourceLocation(atOffset offset: Int) -> JSONError.SourceLocation {
-            .sourceLocation(at: bytes.index(readIndex, offsetBy: offset), fullSource: bytes)
+            .sourceLocation(at: readIndex+offset, of: bytes, in: bytes)
         }
 
         @inline(__always)
@@ -625,15 +641,12 @@ extension JSONScanner {
             readIndex == endIndex
         }
 
-        @inline(__always)
-        func byteOffset(at index: BufferViewIndex<UInt8>) -> Int {
-            bytes.distance(from: bytes.startIndex, to: index)
+        init(bytes: Span<UInt8>) {
+            self.bytes = bytes
         }
 
-        init(bytes: BufferView<UInt8>) {
-            self.bytes = bytes
-            self.readIndex = bytes.startIndex
-            self.endIndex = bytes.endIndex
+        func jsonMap(from partialMap: JSONPartialMapData) -> JSONMap {
+            JSONMap(mapBuffer: partialMap.mapData, dataBuffer: bytes)
         }
 
         @inline(__always)
@@ -642,7 +655,7 @@ extension JSONScanner {
                 return nil
             }
 
-            defer { bytes.formIndex(after: &readIndex) }
+            defer { readIndex += 1 }
 
             return bytes[unchecked: readIndex]
         }
@@ -650,8 +663,8 @@ extension JSONScanner {
         @inline(__always)
         func peek(offset: Int = 0) -> UInt8? {
             precondition(offset >= 0)
-            assert(bytes.startIndex <= readIndex)
-            let peekIndex = bytes.index(readIndex, offsetBy: offset)
+            assert(0 <= readIndex)
+            let peekIndex = readIndex + offset
             guard peekIndex < endIndex else {
                 return nil
             }
@@ -661,12 +674,12 @@ extension JSONScanner {
 
         @inline(__always)
         mutating func moveReaderIndex(forwardBy offset: Int) {
-          bytes.formIndex(&readIndex, offsetBy: offset)
+            readIndex += offset
         }
 
         @inline(__always)
-        func distance(from start: BufferViewIndex<UInt8>, to end: BufferViewIndex<UInt8>) -> Int {
-            bytes.distance(from: start, to: end)
+        func distance(from start: Int, to end: Int) -> Int {
+            end &- start
         }
 
         static var whitespaceBitmap: UInt64 { 1 << UInt8._space | 1 << UInt8._return | 1 << UInt8._newline | 1 << UInt8._tab }
@@ -674,11 +687,11 @@ extension JSONScanner {
         @inline(__always)
         @discardableResult
         mutating func consumeWhitespace() throws -> UInt8 {
-            assert(bytes.startIndex <= readIndex)
+            assert(0 <= readIndex)
             while readIndex < endIndex {
                 let ascii = bytes[unchecked: readIndex]
                 if Self.whitespaceBitmap & (1 << ascii) != 0 {
-                    bytes.formIndex(after: &readIndex)
+                    readIndex += 1
                     continue
                 } else {
                     return ascii
@@ -691,11 +704,11 @@ extension JSONScanner {
         @inline(__always)
         @discardableResult
         mutating func consumeWhitespace(allowingEOF: Bool) throws -> UInt8? {
-            assert(bytes.startIndex <= readIndex)
+            assert(0 <= readIndex)
             while readIndex < endIndex {
                 let ascii = bytes[unchecked: readIndex]
                 if Self.whitespaceBitmap & (1 << ascii) != 0 {
-                    bytes.formIndex(after: &readIndex)
+                    readIndex += 1
                     continue
                 } else {
                     return ascii
@@ -709,15 +722,15 @@ extension JSONScanner {
 
         @inline(__always)
         mutating func readExpectedString(_ str: StaticString, typeDescriptor: String) throws {
-            let cmp = try bytes[unchecked: readIndex..<endIndex].withUnsafeRawPointer { ptr, count in
-                if count < str.utf8CodeUnitCount { throw JSONError.unexpectedEndOfFile }
-                return memcmp(ptr, str.utf8Start, str.utf8CodeUnitCount)
+            let cmp = try bytes.extracting(unchecked: readIndex..<endIndex).withUnsafeBytes {
+                if $0.count < str.utf8CodeUnitCount { throw JSONError.unexpectedEndOfFile }
+                return memcmp($0.baseAddress, str.utf8Start, str.utf8CodeUnitCount)
             }
             guard cmp == 0 else {
                 // Figure out the exact character that is wrong.
                 let badOffset = str.withUTF8Buffer {
-                    for (i, (a, b)) in zip($0, bytes[readIndex..<endIndex]).enumerated() {
-                        if a != b { return i }
+                    for (i, (a, b)) in zip($0, readIndex..<endIndex).enumerated() {
+                        if a != bytes[unchecked: b] { return i }
                     }
                     return 0 // should be unreachable
                 }
@@ -768,7 +781,7 @@ extension JSONScanner {
             throw JSONError.unexpectedEndOfFile
         }
 
-        mutating func skipUTF8StringTillNextUnescapedQuote(isSimple: inout Bool) throws -> BufferViewIndex<UInt8> {
+        mutating func skipUTF8StringTillNextUnescapedQuote(isSimple: inout Bool) throws -> Int {
             // Skip the open quote.
             guard let shouldBeQuote = self.read() else {
                 throw JSONError.unexpectedEndOfFile
@@ -820,7 +833,7 @@ extension JSONScanner {
             try requireRemainingBytes(4)
 
             // We'll validate the actual characters following the '\u' escape during parsing. Just make sure that the string doesn't end prematurely.
-            let hs = bytes.loadUnaligned(from: readIndex, as: UInt32.self)
+            let hs = bytes.rawSpan.unsafeLoadUnaligned(fromUncheckedByteOffset: readIndex, as: UInt32.self)
             guard JSONScanner.noByteMatches(UInt8(ascii: "\""), in: hs) else {
                 let hexString = _withUnprotectedUnsafeBytes(of: hs) { String(decoding: $0, as: UTF8.self) }
                 throw JSONError.invalidHexDigitSequence(hexString, location: sourceLocation)
@@ -883,73 +896,73 @@ extension JSONScanner {
     // MARK: String
 
     static func stringValue(
-        from jsonBytes: BufferView<UInt8>, fullSource: BufferView<UInt8>
+        from jsonBytes: Span<UInt8>, fullSource: Span<UInt8>
     ) throws -> String {
         // Assume easy path first -- no escapes, no characters requiring escapes.
-        var index = jsonBytes.startIndex
-        let endIndex = jsonBytes.endIndex
+        var index = 0
+        let endIndex = jsonBytes.count
         while index < endIndex {
             let byte = jsonBytes[unchecked: index]
             guard byte != ._backslash && _fastPath(byte & 0xe0 != 0) else { break }
-            jsonBytes.formIndex(after: &index)
+            index += 1
         }
 
-        guard var output = String._tryFromUTF8(jsonBytes[unchecked: jsonBytes.startIndex..<index]) else {
-            throw JSONError.cannotConvertInputStringDataToUTF8(location: .sourceLocation(at: jsonBytes.startIndex, fullSource: fullSource))
+        guard var output = String._tryFromUTF8(jsonBytes.extracting(unchecked: 0..<index)) else {
+            throw JSONError.cannotConvertInputStringDataToUTF8(location: .sourceLocation(at: 0, of: jsonBytes, in: fullSource))
         }
         if _fastPath(index == endIndex) {
             // We went through all the characters! Easy peasy.
             return output
         }
 
-        let remainingBytes = jsonBytes[unchecked: index..<endIndex]
+      let remainingBytes = jsonBytes.extracting(unchecked: index..<endIndex)
         try _slowpath_stringValue(from: remainingBytes, appendingTo: &output, fullSource: fullSource)
         return output
     }
 
     static func _slowpath_stringValue(
-        from jsonBytes: BufferView<UInt8>, appendingTo output: inout String, fullSource: BufferView<UInt8>
+        from jsonBytes: borrowing Span<UInt8>, appendingTo output: inout String, fullSource: borrowing Span<UInt8>
     ) throws {
         // Continue scanning, taking into account escaped sequences and control characters
-        var index = jsonBytes.startIndex
+        var index = 0
         var chunkStart = index
-        while index < jsonBytes.endIndex {
+        while index < jsonBytes.count {
             let byte = jsonBytes[unchecked: index]
             switch byte {
             case ._backslash:
-                guard let stringChunk = String._tryFromUTF8(jsonBytes[unchecked: chunkStart..<index]) else {
-                    throw JSONError.cannotConvertInputStringDataToUTF8(location: .sourceLocation(at: chunkStart, fullSource: fullSource))
+                guard let stringChunk = String._tryFromUTF8(jsonBytes.extracting(unchecked: chunkStart..<index)) else {
+                    throw JSONError.cannotConvertInputStringDataToUTF8(location: .sourceLocation(at: chunkStart, of: jsonBytes, in: fullSource))
                 }
                 output += stringChunk
 
                 // Advance past the backslash
-                jsonBytes.formIndex(after: &index)
+                index += 1
 
-                index = try parseEscapeSequence(from: jsonBytes.suffix(from: index), into: &output, fullSource: fullSource)
+                index += try parseEscapeSequence(from: jsonBytes.extracting(droppingFirst: index), into: &output, fullSource: fullSource)
                 chunkStart = index
 
             default:
                 guard _fastPath(byte & 0xe0 != 0) else {
                     // All Unicode characters may be placed within the quotation marks, except for the characters that must be escaped: quotation mark, reverse solidus, and the control characters (U+0000 through U+001F).
-                    throw JSONError.unescapedControlCharacterInString(ascii: byte, location: .sourceLocation(at: index, fullSource: fullSource))
+                    throw JSONError.unescapedControlCharacterInString(ascii: byte, location: .sourceLocation(at: index, of: jsonBytes, in: fullSource))
                 }
 
-                jsonBytes.formIndex(after: &index)
+                index += 1
                 continue
             }
         }
 
-        guard let stringChunk = String._tryFromUTF8(jsonBytes[unchecked: chunkStart..<index]) else {
-            throw JSONError.cannotConvertInputStringDataToUTF8(location: .sourceLocation(at: chunkStart, fullSource: fullSource))
+        guard let stringChunk = String._tryFromUTF8(jsonBytes.extracting(unchecked: chunkStart..<index)) else {
+            throw JSONError.cannotConvertInputStringDataToUTF8(location: .sourceLocation(at: chunkStart, of: jsonBytes, in: fullSource))
         }
         output += stringChunk
     }
 
     private static func parseEscapeSequence(
-        from jsonBytes: BufferView<UInt8>, into string: inout String, fullSource: BufferView<UInt8>
-    ) throws -> BufferViewIndex<UInt8> {
+        from jsonBytes: borrowing Span<UInt8>, into string: inout String, fullSource: borrowing Span<UInt8>
+    ) throws -> Int {
       precondition(!jsonBytes.isEmpty, "Scanning should have ensured that all escape sequences are valid shape")
-        switch jsonBytes[unchecked: jsonBytes.startIndex] {
+        switch jsonBytes[unchecked: 0] {
         case UInt8(ascii:"\""): string.append("\"")
         case UInt8(ascii:"\\"): string.append("\\")
         case UInt8(ascii:"/"): string.append("/")
@@ -959,156 +972,156 @@ extension JSONScanner {
         case UInt8(ascii:"r"): string.append("\u{0D}") // \r
         case UInt8(ascii:"t"): string.append("\u{09}") // \t
         case UInt8(ascii:"u"):
-            return try parseUnicodeSequence(from: jsonBytes.dropFirst(), into: &string, fullSource: fullSource)
+            return try 1 + parseUnicodeSequence(from: jsonBytes.extracting(droppingFirst: 1), into: &string, fullSource: fullSource)
         case let ascii: // default
-            throw JSONError.unexpectedEscapedCharacter(ascii: ascii, location: .sourceLocation(at: jsonBytes.startIndex, fullSource: fullSource))
+            throw JSONError.unexpectedEscapedCharacter(ascii: ascii, location: .sourceLocation(at: 0, of: jsonBytes, in: fullSource))
         }
-        return jsonBytes.index(after: jsonBytes.startIndex)
+        return 1
     }
 
     // Shared with JSON5, which requires allowNulls = false for compatibility.
     internal static func parseUnicodeSequence(
-        from jsonBytes: BufferView<UInt8>, into string: inout String, fullSource: BufferView<UInt8>, allowNulls: Bool = true
-    ) throws -> BufferViewIndex<UInt8> {
+        from jsonBytes: borrowing Span<UInt8>, into string: inout String, fullSource: borrowing Span<UInt8>, allowNulls: Bool = true
+    ) throws -> Int {
         // we build this for utf8 only for now.
-        let (bitPattern, index1) = try parseUnicodeHexSequence(from: jsonBytes, fullSource: fullSource, allowNulls: allowNulls)
+        let (bitPattern, count1) = try parseUnicodeHexSequence(from: jsonBytes, fullSource: fullSource, allowNulls: allowNulls)
 
         // check if lead surrogate
         if UTF16.isLeadSurrogate(bitPattern) {
             // if we have a lead surrogate we expect a trailing surrogate next
             let leadingSurrogateBitPattern = bitPattern
-            var trailingBytes = jsonBytes.suffix(from: index1)
+            var trailingBytes = jsonBytes.extracting(droppingFirst: count1)
             guard trailingBytes.count >= 2 else {
-                throw JSONError.expectedLowSurrogateUTF8SequenceAfterHighSurrogate(location: .sourceLocation(at: index1, fullSource: fullSource))
+                throw JSONError.expectedLowSurrogateUTF8SequenceAfterHighSurrogate(location: .sourceLocation(at: count1, of: jsonBytes, in: fullSource))
             }
-            guard trailingBytes[uncheckedOffset: 0] == ._backslash,
-                  trailingBytes[uncheckedOffset: 1] == UInt8(ascii: "u")
+            guard trailingBytes[unchecked: 0] == ._backslash,
+                  trailingBytes[unchecked: 1] == UInt8(ascii: "u")
             else {
-                throw JSONError.expectedLowSurrogateUTF8SequenceAfterHighSurrogate(location: .sourceLocation(at: index1, fullSource: fullSource))
+                throw JSONError.expectedLowSurrogateUTF8SequenceAfterHighSurrogate(location: .sourceLocation(at: count1, of: jsonBytes, in: fullSource))
             }
-            trailingBytes = trailingBytes.dropFirst(2)
+            trailingBytes = trailingBytes.extracting(droppingFirst: 2)
 
-          let (trailingSurrogateBitPattern, index2) = try parseUnicodeHexSequence(from: trailingBytes, fullSource: fullSource, allowNulls: true)
+            let (trailingSurrogateBitPattern, count2) = try parseUnicodeHexSequence(from: trailingBytes, fullSource: fullSource, allowNulls: true)
             guard UTF16.isTrailSurrogate(trailingSurrogateBitPattern) else {
-              throw JSONError.expectedLowSurrogateUTF8SequenceAfterHighSurrogate(location: .sourceLocation(at: trailingBytes.startIndex, fullSource: fullSource))
+              throw JSONError.expectedLowSurrogateUTF8SequenceAfterHighSurrogate(location: .sourceLocation(at: 0, of: trailingBytes, in: fullSource))
             }
 
             let encodedScalar = UTF16.EncodedScalar([leadingSurrogateBitPattern, trailingSurrogateBitPattern])
             let unicode = UTF16.decode(encodedScalar)
             string.unicodeScalars.append(unicode)
-            return index2
+            return count1 &+ 2 &+ count2
         } else {
             guard let unicode = Unicode.Scalar(bitPattern) else {
-                throw JSONError.couldNotCreateUnicodeScalarFromUInt32(location: .sourceLocation(at: jsonBytes.startIndex, fullSource: fullSource), unicodeScalarValue: UInt32(bitPattern))
+                throw JSONError.couldNotCreateUnicodeScalarFromUInt32(location: .sourceLocation(at: 0, of: jsonBytes, in: fullSource), unicodeScalarValue: UInt32(bitPattern))
             }
             string.unicodeScalars.append(unicode)
-            return index1
+            return count1
         }
     }
 
     internal static func parseUnicodeHexSequence(
-        from jsonBytes: BufferView<UInt8>, fullSource: BufferView<UInt8>, allowNulls: Bool = true
-    ) throws -> (scalar: UInt16, nextIndex: BufferViewIndex<UInt8>) {
-        let digitBytes = jsonBytes.prefix(4)
+        from jsonBytes: borrowing Span<UInt8>, fullSource: borrowing Span<UInt8>, allowNulls: Bool = true
+    ) throws -> (scalar: UInt16, nextIndex: Int) {
+        let digitBytes = jsonBytes.extracting(first: 4)
         precondition(digitBytes.count == 4, "Scanning should have ensured that all escape sequences are valid shape")
 
         guard let result: UInt16 = _parseHexIntegerDigits(digitBytes, isNegative: false)
         else {
             let hexString = String(decoding: digitBytes, as: Unicode.UTF8.self)
-            throw JSONError.invalidHexDigitSequence(hexString, location: .sourceLocation(at: digitBytes.startIndex, fullSource: fullSource))
+            throw JSONError.invalidHexDigitSequence(hexString, location: .sourceLocation(at: 0, of: digitBytes, in: fullSource))
         }
         guard allowNulls || result != 0 else {
-            throw JSONError.invalidEscapedNullValue(location: .sourceLocation(at: jsonBytes.startIndex, fullSource: fullSource))
+            throw JSONError.invalidEscapedNullValue(location: .sourceLocation(at: 0, of: jsonBytes, in: fullSource))
         }
-        assert(digitBytes.endIndex <= jsonBytes.endIndex)
-        return (result, digitBytes.endIndex)
+        assert(digitBytes.count <= jsonBytes.count)
+        return (result, digitBytes.count)
     }
 
 
     // MARK: Numbers
 
-    static func validateLeadingZero(in jsonBytes: BufferView<UInt8>, fullSource: BufferView<UInt8>) throws {
+    static func validateLeadingZero(in jsonBytes: Span<UInt8>, fullSource: Span<UInt8>) throws {
         // Leading zeros are very restricted.
         if jsonBytes.isEmpty {
             // Yep, this is valid.
             return
         }
-        switch jsonBytes[uncheckedOffset: 0] {
+        switch jsonBytes[unchecked: 0] {
         case UInt8(ascii: "."), UInt8(ascii: "e"), UInt8(ascii: "E"):
             // This is valid after a leading zero.
             return
         case _asciiNumbers:
-            throw JSONError.numberWithLeadingZero(location: .sourceLocation(at: jsonBytes.startIndex, fullSource: fullSource))
+            throw JSONError.numberWithLeadingZero(location: .sourceLocation(at: 0, of: jsonBytes, in: fullSource))
         case let byte: // default
-            throw JSONError.unexpectedCharacter(context: "in number", ascii: byte, location: .sourceLocation(at: jsonBytes.startIndex, fullSource: fullSource))
+            throw JSONError.unexpectedCharacter(context: "in number", ascii: byte, location: .sourceLocation(at: 0, of: jsonBytes, in: fullSource))
         }
     }
 
-    // Returns the pointer at which the number's digits begin. If there are no digits, the function throws.
+    // Returns the position where the number's digits begin. If there are no digits, the function throws.
     static func prevalidateJSONNumber(
-        from jsonBytes: BufferView<UInt8>, hasExponent: Bool, fullSource: BufferView<UInt8>
-    ) throws -> BufferViewIndex <UInt8> {
+        from jsonBytes: Span<UInt8>, hasExponent: Bool, fullSource: Span<UInt8>
+    ) throws -> Int {
         // Just make sure we (A) don't have a leading zero, and (B) We have at least one digit.
         guard !jsonBytes.isEmpty else {
             preconditionFailure("Why was this function called, if there is no 0...9 or -")
         }
-        let firstDigitIndex : BufferViewIndex<UInt8>
-        switch jsonBytes[uncheckedOffset: 0] {
+        let firstDigitIndex: Int
+        switch jsonBytes[unchecked: 0] {
         case UInt8(ascii: "0"):
-            try validateLeadingZero(in: jsonBytes.dropFirst(1), fullSource: fullSource)
-            firstDigitIndex = jsonBytes.startIndex
+            try validateLeadingZero(in: jsonBytes.extracting(droppingFirst: 1), fullSource: fullSource)
+            firstDigitIndex = 0
         case UInt8(ascii: "1") ... UInt8(ascii: "9"):
-            firstDigitIndex = jsonBytes.startIndex
+            firstDigitIndex = 0
         case UInt8(ascii: "-"):
             guard jsonBytes.count > 1 else {
-                throw JSONError.unexpectedCharacter(context: "at end of number", ascii: UInt8(ascii: "-"), location: .sourceLocation(at: jsonBytes.startIndex, fullSource: fullSource))
+                throw JSONError.unexpectedCharacter(context: "at end of number", ascii: UInt8(ascii: "-"), location: .sourceLocation(at: 0, of: jsonBytes, in: fullSource))
             }
-            switch jsonBytes[uncheckedOffset: 1] {
+            switch jsonBytes[unchecked: 1] {
             case UInt8(ascii: "0"):
-                try validateLeadingZero(in: jsonBytes.dropFirst(2), fullSource: fullSource)
+                try validateLeadingZero(in: jsonBytes.extracting(droppingFirst: 2), fullSource: fullSource)
             case UInt8(ascii: "1") ... UInt8(ascii: "9"):
                 // Good, we need at least one digit following the '-'
                 break
             case let byte: // default
                 // Any other character is invalid.
-                throw JSONError.unexpectedCharacter(context: "after '-' in number", ascii: byte, location: .sourceLocation(at: jsonBytes.index(after: jsonBytes.startIndex), fullSource: fullSource))
+                throw JSONError.unexpectedCharacter(context: "after '-' in number", ascii: byte, location: .sourceLocation(at: 1, of: jsonBytes, in: fullSource))
             }
-            firstDigitIndex = jsonBytes.index(after: jsonBytes.startIndex)
+            firstDigitIndex = 1
         default:
             preconditionFailure("Why was this function called, if there is no 0...9 or -")
         }
 
         // If the number was found to have an exponent, we have to guarantee that there are digits preceding it, which is a JSON requirement. If we don't, then our floating point parser, which is tolerant of that construction, will succeed and not produce the required error.
         if hasExponent {
-            var index = jsonBytes.index(after: firstDigitIndex)
-            exponentLoop: while index < jsonBytes.endIndex {
+            var index = firstDigitIndex + 1
+            exponentLoop: while index < jsonBytes.count {
                 switch jsonBytes[unchecked: index] {
                 case UInt8(ascii: "e"), UInt8(ascii: "E"):
-                    let previous = jsonBytes.index(before: index)
+                    let previous = index &- 1
                     guard case _asciiNumbers = jsonBytes[unchecked: previous] else {
-                        throw JSONError.unexpectedCharacter(context: "in number", ascii: jsonBytes[index], location: .sourceLocation(at: index, fullSource: fullSource))
+                        throw JSONError.unexpectedCharacter(context: "in number", ascii: jsonBytes[index], location: .sourceLocation(at: index, of: jsonBytes, in: fullSource))
                     }
                     // We're done iterating.
                     break exponentLoop
                 default:
-                    jsonBytes.formIndex(after: &index)
+                    index += 1
                 }
             }
         }
 
-        let lastIndex = jsonBytes.index(before: jsonBytes.endIndex)
-        assert(lastIndex >= jsonBytes.startIndex)
+        let lastIndex = jsonBytes.count &- 1
+        assert(0 <= lastIndex)
         switch jsonBytes[unchecked: lastIndex] {
         case _asciiNumbers:
             break // In JSON, all numbers must end with a digit.
         case let lastByte: // default
-            throw JSONError.unexpectedCharacter(context: "at end of number", ascii: lastByte, location: .sourceLocation(at: lastIndex, fullSource: fullSource))
+            throw JSONError.unexpectedCharacter(context: "at end of number", ascii: lastByte, location: .sourceLocation(at: lastIndex, of: jsonBytes, in: fullSource))
         }
         return firstDigitIndex
     }
 
     // This function is intended to be called after prevalidateJSONNumber() (which provides the digitsBeginPtr) and after parsing fails. It will provide more useful information about the invalid input.
-  static func validateNumber(from jsonBytes: BufferView<UInt8>, fullSource: BufferView<UInt8>) -> JSONError {
+  static func validateNumber(from jsonBytes: Span<UInt8>, fullSource: Span<UInt8>) -> JSONError {
         enum ControlCharacter {
             case operand
             case decimalPoint
@@ -1116,16 +1129,16 @@ extension JSONScanner {
             case expOperator
         }
 
-        var index = jsonBytes.startIndex
-        let endIndex = jsonBytes.endIndex
+        var index = 0
+        let endIndex = jsonBytes.count
         // Fast-path, assume all digits.
         while index < endIndex {
             guard _asciiNumbers.contains(jsonBytes[index]) else { break }
-            jsonBytes.formIndex(after: &index)
+            index += 1
         }
 
         var pastControlChar: ControlCharacter = .operand
-        var digitsSinceControlChar = jsonBytes.distance(from: jsonBytes.startIndex, to: index)
+        var digitsSinceControlChar = index
 
         // parse everything else
         while index < endIndex {
@@ -1135,7 +1148,7 @@ extension JSONScanner {
                 digitsSinceControlChar += 1
             case UInt8(ascii: "."):
                 guard digitsSinceControlChar > 0, pastControlChar == .operand else {
-                    return JSONError.unexpectedCharacter(context: "in number", ascii: byte, location: .sourceLocation(at: index, fullSource: fullSource))
+                    return JSONError.unexpectedCharacter(context: "in number", ascii: byte, location: .sourceLocation(at: index, of: jsonBytes, in: fullSource))
                 }
                 pastControlChar = .decimalPoint
                 digitsSinceControlChar = 0
@@ -1144,22 +1157,22 @@ extension JSONScanner {
                 guard digitsSinceControlChar > 0,
                       pastControlChar == .operand || pastControlChar == .decimalPoint
                 else {
-                    return JSONError.unexpectedCharacter(context: "in number", ascii: byte, location: .sourceLocation(at: index, fullSource: fullSource))
+                    return JSONError.unexpectedCharacter(context: "in number", ascii: byte, location: .sourceLocation(at: index, of: jsonBytes, in: fullSource))
                 }
                 pastControlChar = .exp
                 digitsSinceControlChar = 0
 
             case UInt8(ascii: "+"), UInt8(ascii: "-"):
                 guard digitsSinceControlChar == 0, pastControlChar == .exp else {
-                    return JSONError.unexpectedCharacter(context: "in number", ascii: byte, location: .sourceLocation(at: index, fullSource: fullSource))
+                    return JSONError.unexpectedCharacter(context: "in number", ascii: byte, location: .sourceLocation(at: index, of: jsonBytes, in: fullSource))
                 }
                 pastControlChar = .expOperator
                 digitsSinceControlChar = 0
 
             default:
-                return JSONError.unexpectedCharacter(context: "in number", ascii: byte, location: .sourceLocation(at: index, fullSource: fullSource))
+                return JSONError.unexpectedCharacter(context: "in number", ascii: byte, location: .sourceLocation(at: index, of: jsonBytes, in: fullSource))
             }
-            jsonBytes.formIndex(after: &index)
+            index += 1
         }
 
         if digitsSinceControlChar > 0 {
@@ -1172,15 +1185,17 @@ extension JSONScanner {
 
 // Protocol conformed to by the numeric types we parse. For each of them, the
 protocol PrevalidatedJSONNumberBufferConvertible {
-    init?(prevalidatedBuffer buffer: BufferView<UInt8>)
+    init?(prevalidatedBuffer buffer: Span<UInt8>)
 }
 
 extension Double : PrevalidatedJSONNumberBufferConvertible {
-    init?(prevalidatedBuffer buffer: BufferView<UInt8>) {
-        let decodedValue = buffer.withUnsafePointer { nptr, count -> Double? in
+    init?(prevalidatedBuffer buffer: Span<UInt8>) {
+        let decodedValue: Double? = buffer.withUnsafeBytes {
             var endPtr: UnsafeMutablePointer<CChar>? = nil
+            let (nptr, count) = ($0.baseAddress, $0.count)
             let decodedValue = _stringshims_strtod_l(nptr, &endPtr, nil)
-            if let endPtr, nptr.advanced(by: count) == endPtr {
+            if let bytesEndPtr = nptr?.advanced(by: count),
+               let endPtr, bytesEndPtr == endPtr {
                 return decodedValue
             } else {
                 return nil
@@ -1192,11 +1207,13 @@ extension Double : PrevalidatedJSONNumberBufferConvertible {
 }
 
 extension Float : PrevalidatedJSONNumberBufferConvertible {
-    init?(prevalidatedBuffer buffer: BufferView<UInt8>) {
-        let decodedValue = buffer.withUnsafePointer { nptr, count -> Float? in
+    init?(prevalidatedBuffer buffer: Span<UInt8>) {
+        let decodedValue: Float? = buffer.withUnsafeBytes {
             var endPtr: UnsafeMutablePointer<CChar>? = nil
+            let (nptr, count) = ($0.baseAddress, $0.count)
             let decodedValue = _stringshims_strtof_l(nptr, &endPtr, nil)
-            if let endPtr, nptr.advanced(by: count) == endPtr {
+            if let bytesEndPtr = nptr?.advanced(by: count),
+               let endPtr, bytesEndPtr == endPtr {
                 return decodedValue
             } else {
                 return nil
@@ -1207,24 +1224,24 @@ extension Float : PrevalidatedJSONNumberBufferConvertible {
     }
 }
 
-internal func _parseInteger<Result: FixedWidthInteger>(_ codeUnits: BufferView<UInt8>) -> Result? {
+internal func _parseInteger<Result: FixedWidthInteger>(_ codeUnits: Span<UInt8>) -> Result? {
     guard _fastPath(!codeUnits.isEmpty) else { return nil }
 
     // ASCII constants, named for clarity:
     let _plus = 43 as UInt8, _minus = 45 as UInt8
 
-    let first = codeUnits[uncheckedOffset: 0]
+    let first = codeUnits[unchecked: 0]
     if first == _minus {
-        return _parseIntegerDigits(codeUnits.dropFirst(), isNegative: true)
+        return _parseIntegerDigits(codeUnits.extracting(droppingFirst: 1), isNegative: true)
     }
     if first == _plus {
-        return _parseIntegerDigits(codeUnits.dropFirst(), isNegative: false)
+        return _parseIntegerDigits(codeUnits.extracting(droppingFirst: 1), isNegative: false)
     }
     return _parseIntegerDigits(codeUnits, isNegative: false)
 }
 
 extension FixedWidthInteger {
-    init?(prevalidatedBuffer buffer: BufferView<UInt8>) {
+    init?(prevalidatedBuffer buffer: Span<UInt8>) {
         guard let val : Self = _parseInteger(buffer) else {
             return nil
         }
@@ -1239,17 +1256,18 @@ enum JSONError: Swift.Error, Equatable {
         let index: Int
 
         static func sourceLocation(
-          at location: BufferViewIndex<UInt8>, fullSource: BufferView<UInt8>
+            at location: Int, of span: Span<UInt8>, in fullSource: Span<UInt8>
         ) -> SourceLocation {
-            precondition(fullSource.startIndex <= location && location <= fullSource.endIndex)
-            var index = fullSource.startIndex
+            precondition(span.validateBounds(location))
+            let location = fullSource.offsets(of: span).lowerBound + location
+            var index = 0
             var line = 1
             var col = 0
-            let end = min(location.advanced(by: 1), fullSource.endIndex)
+            let end = min(location + 1, fullSource.count)
             while index < end {
                 switch fullSource[index] {
                 case ._return:
-                    let next = fullSource.index(after: index)
+                    let next = index + 1
                     if next <= location, fullSource[next] == ._newline {
                         index = next
                     }
@@ -1261,10 +1279,9 @@ enum JSONError: Swift.Error, Equatable {
                 default:
                     col += 1
                 }
-                fullSource.formIndex(after: &index)
+                index += 1
             }
-            let offset = fullSource.distance(from: fullSource.startIndex, to: location)
-            return SourceLocation(line: line, column: col, index: offset)
+            return SourceLocation(line: line, column: col, index: location)
         }
     }
 
