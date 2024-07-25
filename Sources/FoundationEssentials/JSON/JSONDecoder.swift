@@ -728,7 +728,7 @@ extension JSONDecoderImpl: Decoder {
                     // TODO: Proper handling of Infinity and NaN Decimal values.
                     return Decimal.quietNaN
                 } else {
-                    let decimalParseResult = numberBuffer.withUnsafeBufferPointer({ Decimal._decimal(from: $0, matchEntireString: true) })
+                    let decimalParseResult = Decimal._decimal(from: numberBuffer, matchEntireString: true)
                     switch decimalParseResult {
                     case .success(let result, _):
                         return result
@@ -741,7 +741,7 @@ extension JSONDecoderImpl: Decoder {
 
             } else {
                 let firstDigitOffset = try JSONScanner.prevalidateJSONNumber(from: numberBuffer, hasExponent: hasExponent, fullSource: fullSource)
-                let decimalParseResult = numberBuffer.withUnsafeBufferPointer({ Decimal._decimal(from: $0, matchEntireString: true) })
+                let decimalParseResult = Decimal._decimal(from: numberBuffer, matchEntireString: true)
                 switch decimalParseResult {
                 case .success(let result, _):
                     return result
@@ -1005,7 +1005,7 @@ extension JSONDecoderImpl: Decoder {
             }
         }
 
-        let decimalParseResult = numberBuffer.withUnsafeBufferPointer({ Decimal._decimal(from: $0, matchEntireString: true).asOptional })
+        let decimalParseResult = Decimal._decimal(from: numberBuffer, matchEntireString: true).asOptional
         if let decimal = decimalParseResult.result {
             guard let value = T(decimal) else {
                 throw JSONError.numberIsNotRepresentableInSwift(parsed: String(decoding: numberBuffer, as: UTF8.self))

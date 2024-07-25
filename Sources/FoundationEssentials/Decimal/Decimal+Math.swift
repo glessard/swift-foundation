@@ -267,19 +267,6 @@ extension Decimal {
         return result
     }
     
-    internal func _multiplyBy10AndAdd(
-        number: UInt16
-    ) throws -> Decimal {
-        do {
-            var result = try _multiply(byShort: 10)
-            result = try result._add(number)
-            return result
-        } catch {
-            throw _CalculationError.overflow
-        }
-    }
-
-
     internal func _divide(by divisor: UInt16) throws -> (result: Decimal, remainder: UInt16) {
         let (resultValue, remainder) = try Self._integerDivideByShort(
             self.asVariableLengthInteger(), UInt32(divisor)

@@ -431,11 +431,11 @@ internal func __NSStringToDecimal(
     processedLength: UnsafeMutablePointer<Int>,
     result: UnsafeMutablePointer<Decimal>
 ) {
-    let parsed = Decimal._decimal(
+    let parsed = Decimal.decimal(
         from: string.utf8,
         decimalSeparator: ".".utf8,
         matchEntireString: false
-    ).asOptional
+    )
     processedLength.pointee = parsed.processedLength
     if let parsedResult = parsed.result {
         result.pointee = parsedResult
