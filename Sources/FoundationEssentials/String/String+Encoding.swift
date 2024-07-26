@@ -18,6 +18,10 @@
 public var kCFStringEncodingASCII: CFStringEncoding { return 0x0600 }
 #endif // FOUNDATION_FRAMEWORK
 
+#if !FOUNDATION_FRAMEWORK
+public typealias FoundationEssentialsStringEncoding = String.Encoding
+#endif
+
 @available(macOS 10.10, iOS 8.0, watchOS 2.0, tvOS 9.0, *)
 extension String {
 
