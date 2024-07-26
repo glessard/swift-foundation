@@ -75,7 +75,7 @@ extension Decimal {
     internal func _add(
         rhs: Decimal,
         roundingMode: RoundingMode
-    ) throws -> (result: Decimal, lossOfPrecision: Bool) {
+    ) throws(_CalculationError) -> (result: Decimal, lossOfPrecision: Bool) {
         if self.isNaN || rhs.isNaN {
             throw _CalculationError.overflow
         }
@@ -150,7 +150,7 @@ extension Decimal {
         return (result: result, lossOfPrecision: lossOfPrecision)
     }
 
-    internal func _add(_ amount: UInt16) throws -> Decimal {
+    internal func _add(_ amount: UInt16) throws(_CalculationError) -> Decimal {
         var result = self
         var carry: UInt32 = UInt32(amount)
         var index: UInt32 = 0
@@ -174,7 +174,7 @@ extension Decimal {
     internal func _subtract(
         rhs: Decimal,
         roundingMode: RoundingMode
-    ) throws -> Decimal {
+    ) throws(_CalculationError) -> Decimal {
         var right = rhs
         if right._length != 0 {
             right._isNegative = right._isNegative == 0 ? 1 : 0
@@ -185,7 +185,7 @@ extension Decimal {
         ).result
     }
 
-    internal func _multiply(byShort multiplicand: UInt16) throws -> Decimal {
+    internal func _multiply(byShort multiplicand: UInt16) throws(_CalculationError) -> Decimal {
         var result = self
         if multiplicand == 0 {
             result._length = 0
@@ -441,7 +441,7 @@ extension Decimal {
         return result
     }
 
-    internal static func _normalize(a: inout Decimal, b: inout Decimal, roundingMode: RoundingMode) throws -> Bool {
+    internal static func _normalize(a: inout Decimal, b: inout Decimal, roundingMode: RoundingMode) throws(_CalculationError) -> Bool {
         var diffExp = Int(a._exponent - b._exponent)
         // If the two numbers share the same exponents,
         // the normalization is already done
@@ -449,8 +449,8 @@ extension Decimal {
             return false
         }
 
-        return try withUnsafeMutablePointer(to: &a) { aPtr -> Bool in
-            return try withUnsafeMutablePointer(to: &b) { bPtr -> Bool in
+        return try withUnsafeMutablePointer(to: &a) { aPtr throws(_CalculationError) -> Bool in
+            return try withUnsafeMutablePointer(to: &b) { bPtr throws(_CalculationError) -> Bool in
                 // Put the smaller number in aa
                 let aa: UnsafeMutablePointer<Decimal>
                 let bb: UnsafeMutablePointer<Decimal>
@@ -756,7 +756,7 @@ extension Decimal {
         }
     }
 
-    internal mutating func copyVariableLengthInteger(_ source: VariableLengthInteger) throws {
+    internal mutating func copyVariableLengthInteger(_ source: VariableLengthInteger) throws(_CalculationError) {
         guard source.count <= Decimal.maxSize else {
             throw _CalculationError.overflow
         }
@@ -842,7 +842,7 @@ extension Decimal {
         return result
     }
 
-    private static func _integerAddShort(_ lhs: VariableLengthInteger, rhs: UInt32, maxResultLength: Int? = nil) throws -> VariableLengthInteger {
+    private static func _integerAddShort(_ lhs: VariableLengthInteger, rhs: UInt32, maxResultLength: Int? = nil) throws(_CalculationError) -> VariableLengthInteger {
         var carry: UInt32 = rhs
         var result: VariableLengthInteger = Array(repeating: 0, count: lhs.count)
         for index in 0 ..< lhs.count {
@@ -863,7 +863,7 @@ extension Decimal {
         term: VariableLengthInteger,
         subtrahend: VariableLengthInteger,
         maxResultLength: Int
-    ) throws -> VariableLengthInteger {
+    ) throws(_CalculationError) -> VariableLengthInteger {
         var carry: UInt32 = 1
         var i = 0
         var result: VariableLengthInteger = Array(repeating: 0, count: maxResultLength)
@@ -906,7 +906,7 @@ extension Decimal {
     private static func _integerDivideByShort(
         _ dividend: VariableLengthInteger,
         _ divisor: UInt32
-    ) throws -> (quotient: VariableLengthInteger, remainder: UInt32) {
+    ) throws(_CalculationError) -> (quotient: VariableLengthInteger, remainder: UInt32) {
         if divisor == 0 {
             throw _CalculationError.divideByZero
         }
@@ -928,7 +928,7 @@ extension Decimal {
         dividend: VariableLengthInteger,
         divisor: VariableLengthInteger,
         maxResultLength: Int
-    ) throws -> VariableLengthInteger {
+    ) throws(_CalculationError) -> VariableLengthInteger {
         if divisor.isEmpty {
             throw _CalculationError.divideByZero
         }
@@ -1040,7 +1040,7 @@ extension Decimal {
         lhs: VariableLengthInteger,
         rhs: VariableLengthInteger,
         maxResultLength: Int
-    ) throws -> VariableLengthInteger {
+    ) throws(_CalculationError) -> VariableLengthInteger {
         if lhs.isEmpty || rhs.isEmpty {
             return []
         }
@@ -1080,7 +1080,7 @@ extension Decimal {
     private static func _integerMultiplyByShort(
         lhs: VariableLengthInteger,
         mulplicand: UInt32, maxResultLength: Int
-    ) throws -> VariableLengthInteger {
+    ) throws(_CalculationError) -> VariableLengthInteger {
         if mulplicand == 0 {
             return []
         }
@@ -1108,7 +1108,7 @@ extension Decimal {
         lhs: VariableLengthInteger,
         power: Int,
         maxResultLength: Int
-    ) throws -> VariableLengthInteger {
+    ) throws(_CalculationError) -> VariableLengthInteger {
         // 10^0 == 1, it's just a copy
         if power == 0 {
             return lhs
@@ -1187,7 +1187,7 @@ extension Decimal {
     private static func _fitMantissa(
         _ value: VariableLengthInteger,
         roundingMode: RoundingMode
-    ) throws -> (result: VariableLengthInteger, exponent: Int, lossOfPrecision: Bool) {
+    ) throws(_CalculationError) -> (result: VariableLengthInteger, exponent: Int, lossOfPrecision: Bool) {
         if value.count <= Decimal.maxSize {
             return (result: value, exponent: 0, lossOfPrecision: false)
         }

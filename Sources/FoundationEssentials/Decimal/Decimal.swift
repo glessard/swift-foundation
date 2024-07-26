@@ -273,7 +273,7 @@ extension Decimal {
         func multiplyBy10AndAdd(
             _ decimal: Decimal,
             number: UInt16
-        ) throws -> Decimal {
+        ) throws(_CalculationError) -> Decimal {
             do {
                 var result = try decimal._multiply(byShort: 10)
                 result = try result._add(number)
