@@ -17,6 +17,8 @@ import func Benchmark.blackHole
 import Foundation
 #else
 @testable import FoundationEssentials
+
+private func autoreleasepool<T>(_ block: () -> T) -> T { block() }
 #endif
 
 
