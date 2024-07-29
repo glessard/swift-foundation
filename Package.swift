@@ -147,6 +147,13 @@ let package = Package(
             ],
             swiftSettings: availabilityMacros + concurrencyChecking
         ),
+        .testTarget(
+            name: "FoundationEssentialsBenchmarks",
+            dependencies: [
+                "FoundationEssentials"
+            ],
+            swiftSettings: availabilityMacros + concurrencyChecking
+        ),
 
         // FoundationInternationalization
         .target(

@@ -1,3 +1,4 @@
+var twitter: String { """
 {
   "statuses": [
     {
@@ -15479,4 +15480,6 @@
     "since_id": 0,
     "since_id_str": "0"
   }
+}
+"""
 }

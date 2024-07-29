@@ -1,3 +1,4 @@
+var citm_catalog: String { """
 {
     "areaNames": {
         "205705993": "Arrière-scène central",
@@ -50466,4 +50467,6 @@
     "venueNames": {
         "PLEYEL_PLEYEL": "Salle Pleyel"
     }
+}
+"""
 }

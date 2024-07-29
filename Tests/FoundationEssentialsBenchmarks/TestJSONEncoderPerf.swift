@@ -74,20 +74,9 @@ class TestJSONEncoderPerf : XCTestCase {
         let features : [CoordinateFeature]
     }
 
-  func testTestBundle() throws {
-    let url = Bundle.module.path(forResource: "canada", ofType: "json")
-    print(url ?? "nil")
-
-    let data = testData(forResource: "canada", withExtension: "json")
-    print(data?.count ?? -1)
-  }
-
     func test_encode_canada() throws {
-        guard let data = testData(forResource: "canada", withExtension: "json") else {
-            throw MissingResource.name("canada.json")
-        }
-        let canada = try JSONDecoder().decode(CoordinateFormat.self, from: data)
-        
+        let canada = try JSONDecoder().decode(CoordinateFormat.self, from: Data(canada.utf8))
+
         measure {
             for _ in 0..<20 {
                 let _ = try! JSONEncoder().encode(canada)
@@ -108,11 +97,8 @@ class TestJSONEncoderPerf : XCTestCase {
     }()
     
     func test_encode_canada_sorted() throws {
-        guard let data = testData(forResource: "canada", withExtension: "json") else {
-            throw MissingResource.name("canada.json")
-        }
-        let canada = try JSONDecoder().decode(CoordinateFormat.self, from: data)
-        
+        let canada = try JSONDecoder().decode(CoordinateFormat.self, from: Data(canada.utf8))
+
         measure {
             for _ in 0..<20 {
                 let _ = try! sortingEncoder.encode(canada)
@@ -121,11 +107,8 @@ class TestJSONEncoderPerf : XCTestCase {
     }
     
     func test_encode_canada_pretty() throws {
-        guard let data = testData(forResource: "canada", withExtension: "json") else {
-            throw MissingResource.name("canada.json")
-        }
-        let canada = try JSONDecoder().decode(CoordinateFormat.self, from: data)
-        
+        let canada = try JSONDecoder().decode(CoordinateFormat.self, from: Data(canada.utf8))
+
         measure {
             for _ in 0..<20 {
                 let _ = try! prettyEncoder.encode(canada)
@@ -134,9 +117,7 @@ class TestJSONEncoderPerf : XCTestCase {
     }
 
     func test_decode_canada() throws {
-        guard let data = testData(forResource: "canada", withExtension: "json") else {
-            throw MissingResource.name("canada.json")
-        }
+        let data = Data(canada.utf8)
 
         measure {
             for _ in 0..<20 {
@@ -209,11 +190,8 @@ class TestJSONEncoderPerf : XCTestCase {
     }
     
     func test_encode_twitter() throws {
-        guard let data = testData(forResource: "twitter", withExtension: "json") else {
-            throw MissingResource.name("twitter.json")
-        }
-        let twitter = try JSONDecoder().decode(TwitterArchive.self, from: data)
-        
+        let twitter = try JSONDecoder().decode(TwitterArchive.self, from: Data(twitter.utf8))
+
         measure {
             for _ in 0..<100 {
                 let _ = try! JSONEncoder().encode(twitter)
@@ -222,11 +200,8 @@ class TestJSONEncoderPerf : XCTestCase {
     }
     
     func test_encode_twitter_sorted() throws {
-        guard let data = testData(forResource: "twitter", withExtension: "json") else {
-            throw MissingResource.name("twitter.json")
-        }
-        let twitter = try JSONDecoder().decode(TwitterArchive.self, from: data)
-        
+        let twitter = try JSONDecoder().decode(TwitterArchive.self, from: Data(twitter.utf8))
+
         measure {
             for _ in 0..<25 {
                 let _ = try! sortingEncoder.encode(twitter)
@@ -235,11 +210,8 @@ class TestJSONEncoderPerf : XCTestCase {
     }
     
     func test_encode_twitter_pretty() throws {
-        guard let data = testData(forResource: "twitter", withExtension: "json") else {
-            throw MissingResource.name("twitter.json")
-        }
-        let twitter = try JSONDecoder().decode(TwitterArchive.self, from: data)
-        
+        let twitter = try JSONDecoder().decode(TwitterArchive.self, from: Data(twitter.utf8))
+
         measure {
             for _ in 0..<100 {
                 let _ = try! prettyEncoder.encode(twitter)
@@ -248,9 +220,7 @@ class TestJSONEncoderPerf : XCTestCase {
     }
 
     func test_decode_twitter() throws {
-        guard let data = testData(forResource: "twitter", withExtension: "json") else {
-            throw MissingResource.name("twitter.json")
-        }
+      let data = Data(twitter.utf8)
 
         measure {
             for _ in 0..<100 {
@@ -306,11 +276,8 @@ class TestJSONEncoderPerf : XCTestCase {
     }
     
     func test_encode_catalog() throws {
-        guard let data = testData(forResource: "citm_catalog", withExtension: "json") else {
-            throw MissingResource.name("citm_catalog.json")
-        }
-        let catalog = try JSONDecoder().decode(Catalog.self, from: data)
-        
+        let catalog = try JSONDecoder().decode(Catalog.self, from: Data(citm_catalog.utf8))
+
         measure {
             for _ in 0..<100 {
                 let _ = try! JSONEncoder().encode(catalog)
@@ -319,11 +286,8 @@ class TestJSONEncoderPerf : XCTestCase {
     }
     
     func test_encode_catalog_sorted() throws {
-        guard let data = testData(forResource: "citm_catalog", withExtension: "json") else {
-            throw MissingResource.name("citm_catalog.json")
-        }
-        let catalog = try JSONDecoder().decode(Catalog.self, from: data)
-        
+        let catalog = try JSONDecoder().decode(Catalog.self, from: Data(citm_catalog.utf8))
+
         measure {
             for _ in 0..<100 {
                 let _ = try! sortingEncoder.encode(catalog)
@@ -332,11 +296,8 @@ class TestJSONEncoderPerf : XCTestCase {
     }
     
     func test_encode_catalog_pretty() throws {
-        guard let data = testData(forResource: "citm_catalog", withExtension: "json") else {
-            throw MissingResource.name("citm_catalog.json")
-        }
-        let catalog = try JSONDecoder().decode(Catalog.self, from: data)
-        
+        let catalog = try JSONDecoder().decode(Catalog.self, from: Data(citm_catalog.utf8))
+
         measure {
             for _ in 0..<100 {
                 let _ = try! prettyEncoder.encode(catalog)
@@ -345,9 +306,7 @@ class TestJSONEncoderPerf : XCTestCase {
     }
 
     func test_decode_catalog() throws {
-        guard let data = testData(forResource: "citm_catalog", withExtension: "json") else {
-            throw MissingResource.name("citm_catalog.json")
-        }
+        let data = Data(citm_catalog.utf8)
 
         measure {
             for _ in 0..<100 {
