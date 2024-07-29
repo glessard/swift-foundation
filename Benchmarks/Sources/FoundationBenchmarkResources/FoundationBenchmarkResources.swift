@@ -16,14 +16,16 @@ package enum MissingResource: Error {
   case named(String)
 }
 
-package func testData(
-  named resource: String, extension ext: String, subdirectory: String? = nil
-) throws -> [UInt8] {
+package func dataPath(
+    named resource: String, subdirectory: String? = nil
+) throws(MissingResource) -> String {
 #if FOUNDATION_FRAMEWORK
-    guard let url = Bundle(for: Canary.self).url(forResource: resource, withExtension: ext, subdirectory: subdirectory) else {
-        return nil
+    final class Canary { }
+
+    guard let url = Bundle(for: Canary.self).url(forResource: resource, withExtension: nil, subdirectory: subdirectory) else {
+        throw MissingResource.named(resource)
     }
-    return try Array(Data(contentsOf: url))
+    return url.path()
 #else
 #if os(macOS)
     let subdir: String
@@ -33,11 +35,10 @@ package func testData(
         subdir = "Resources"
     }
 
-    guard let url = Bundle.module.url(forResource: resource, withExtension: ext, subdirectory: subdir) else {
-        throw MissingResource.named("\(resource).\(ext)")
+    guard let url = Bundle.module.url(forResource: resource, withExtension: nil, subdirectory: subdir) else {
+        throw MissingResource.named(resource)
     }
-
-    return try Array(Data(contentsOf: url))
+    return url.path()
 #else
     // swiftpm drops the resources next to the executable, at:
     // ./FoundationPreview_FoundationEssentialsTests.resources/Resources/
@@ -49,8 +50,8 @@ package func testData(
     if let subdirectory {
         path.append(path: subdirectory, directoryHint: .isDirectory)
     }
-    path.append(component: resource + "." + ext, directoryHint: .notDirectory)
-    return try? Data(contentsOf: path)
+    path.append(component: resource, directoryHint: .notDirectory)
+    return url.path()
 #endif
 #endif
 }

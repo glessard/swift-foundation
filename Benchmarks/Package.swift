@@ -93,5 +93,17 @@ let package = Package(
                 .plugin(name: "BenchmarkPlugin", package: "package-benchmark")
             ]
         ),
+        .executableTarget(
+            name: "JSONBenchmarks",
+            dependencies: [
+                .product(name: "FoundationEssentials", package: "swift-foundation-local"),
+                .product(name: "Benchmark", package: "package-benchmark"),
+                "FoundationBenchmarkSupport", "FoundationBenchmarkResources",
+            ],
+            path: "Benchmarks/JSON",
+            plugins: [
+                .plugin(name: "BenchmarkPlugin", package: "package-benchmark")
+            ]
+        ),
     ]
 )
