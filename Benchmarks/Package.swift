@@ -16,6 +16,12 @@ let package = Package(
                 .product(name: "FoundationEssentials", package: "swift-foundation-local"),
             ]
         ),
+        .target(
+            name: "FoundationBenchmarkResources",
+            resources: [
+                .copy("Resources")
+            ]
+        ),
 
         .executableTarget(
             name: "PredicateBenchmarks",
