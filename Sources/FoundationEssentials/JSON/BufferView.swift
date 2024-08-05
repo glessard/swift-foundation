@@ -13,7 +13,7 @@
 // A BufferView<Element> represents a span of memory which
 // contains initialized `Element` instances.
 
-internal struct BufferView<Element> {
+internal struct BufferView<Element: BitwiseCopyable> {
     let start: BufferViewIndex<Element>
     let count: Int
 
@@ -25,12 +25,6 @@ internal struct BufferView<Element> {
 
     init(start index: BufferViewIndex<Element>, count: Int) {
         precondition(count >= 0, "Count must not be negative")
-        if !_isPOD(Element.self) {
-            precondition(
-                index.isAligned,
-                "baseAddress must be properly aligned for \(Element.self)"
-            )
-        }
         self.init(_unchecked: (index, count))
     }
 
@@ -47,7 +41,6 @@ internal struct BufferView<Element> {
 extension BufferView /*where Element: BitwiseCopyable*/ {
 
     init?(unsafeRawBufferPointer buffer: UnsafeRawBufferPointer) {
-        guard _isPOD(Element.self) else { fatalError() }
         guard let p = buffer.baseAddress else { return nil }
         let (q, r) = buffer.count.quotientAndRemainder(dividingBy: MemoryLayout<Element>.stride)
         precondition(r == 0)
@@ -124,13 +117,6 @@ extension BufferView:
                 && distance(from: position, to: endIndex) > 0,
             "Index out of bounds"
         )
-        //FIXME: Use `BitwiseCopyable` layout constraint
-        if !_isPOD(Element.self) {
-            precondition(
-                position.isAligned,
-                "Index is unaligned for Element"
-            )
-        }
     }
 
     @inline(__always)
@@ -148,13 +134,6 @@ extension BufferView:
                 && distance(from: bounds.upperBound, to: endIndex) >= 0,
             "Range of indices out of bounds"
         )
-        //FIXME: Use `BitwiseCopyable` layout constraint
-        if !_isPOD(Element.self) {
-            precondition(
-                bounds.lowerBound.isAligned && bounds.upperBound.isAligned,
-                "Range of indices is unaligned for Element"
-            )
-        }
     }
 
     @inline(__always)
@@ -210,11 +189,7 @@ extension BufferView:
     @inline(__always)
     subscript(unchecked position: Index) -> Element {
         get {
-            if _isPOD(Element.self) {
-                return position._rawValue.loadUnaligned(as: Element.self)
-            } else {
-                return position._rawValue.load(as: Element.self)
-            }
+            return position._rawValue.loadUnaligned(as: Element.self)
         }
     }
 
@@ -299,7 +274,6 @@ extension BufferView /* where Element: BitwiseCopyable */ {
     func load<T>(
         fromByteOffset offset: Int = 0, as: T.Type
     ) -> T {
-        guard _isPOD(Element.self) else { fatalError() }
         _checkBounds(
             Range(
                 uncheckedBounds: (
@@ -315,10 +289,9 @@ extension BufferView /* where Element: BitwiseCopyable */ {
         return load(fromByteOffset: o, as: T.self)
     }
 
-    func loadUnaligned<T /*: BitwiseCopyable */>(
+    func loadUnaligned<T: BitwiseCopyable>(
         fromByteOffset offset: Int = 0, as: T.Type
     ) -> T {
-        guard _isPOD(Element.self) && _isPOD(T.self) else { fatalError() }
         _checkBounds(
             Range(
                 uncheckedBounds: (
@@ -329,7 +302,7 @@ extension BufferView /* where Element: BitwiseCopyable */ {
         return baseAddress.loadUnaligned(fromByteOffset: offset, as: T.self)
     }
 
-    func loadUnaligned<T /*: BitwiseCopyable */>(
+    func loadUnaligned<T: BitwiseCopyable>(
         from index: Index, as: T.Type
     ) -> T {
         let o = distance(from: startIndex, to: index) * MemoryLayout<Element>.stride

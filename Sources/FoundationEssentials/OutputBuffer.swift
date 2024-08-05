@@ -10,7 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-struct OutputBuffer<T>: ~Copyable // ~Escapable
+struct OutputBuffer<T: BitwiseCopyable>: ~Copyable // ~Escapable
 {
     let start: UnsafeMutablePointer<T>
     let capacity: Int
