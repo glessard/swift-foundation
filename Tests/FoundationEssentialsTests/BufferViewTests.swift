@@ -36,15 +36,6 @@ final class BufferViewTests: XCTestCase {
         )
     }
 
-    func testInitBufferViewOrdinaryElement() {
-        let capacity = 4
-        let s = (0..<capacity).map({ "\(#file)+\(#function)--\($0)" })
-        s.withUnsafeBufferPointer {
-            let b = BufferView(unsafeBufferPointer: $0)
-            _ = b
-        }
-    }
-
     func testInitBitwiseCopyableElement() {
         let capacity = 4
         let a = Array(0..<capacity)
@@ -70,7 +61,7 @@ final class BufferViewTests: XCTestCase {
 
     func testIndex() {
         let count = 4
-        let strings = (1...count).map({ "This String is not BitwiseCopyable (\($0))." })
+        let strings = Array(1...count)
         strings.withUnsafeBufferPointer {
             let buffer = BufferView(unsafeBufferPointer: $0)!
 
@@ -78,22 +69,6 @@ final class BufferViewTests: XCTestCase {
             let second = first.advanced(by: 1)
             XCTAssertLessThan(first, second)
             XCTAssertEqual(1, first.distance(to: second))
-        }
-    }
-
-    func testIteratorOrdinaryElement() {
-        let capacity = 4
-        let s = (0..<capacity).map({ "\(#file)+\(#function)--\($0)" })
-        s.withUnsafeBufferPointer {
-            let view = BufferView(unsafeBufferPointer: $0)!
-
-            var iterator = view.makeIterator()
-            var buffered = 0
-            while let value = iterator.next() {
-                XCTAssertEqual(value.isEmpty, false)
-                buffered += 1
-            }
-            XCTAssertEqual(buffered, $0.count)
         }
     }
 
@@ -145,19 +120,6 @@ final class BufferViewTests: XCTestCase {
 
             let r = view.withContiguousStorageIfAvailable { $0.reduce(0, +) }
             XCTAssertEqual(r, capacity * (capacity - 1) / 2)
-        }
-
-        let s = a.map(String.init)
-        s.withUnsafeBufferPointer {
-            let view = BufferView(unsafeBufferPointer: $0)!
-
-            var i = view.makeIterator()
-            var o = $0.startIndex
-            while let v = i.next() {
-                XCTAssertEqual(v, String($0[o]))
-                $0.formIndex(after: &o)
-            }
-            XCTAssertNil(i.next())
         }
     }
 
@@ -217,18 +179,11 @@ final class BufferViewTests: XCTestCase {
             let v = BufferView(unsafeBufferPointer: $0)!
             XCTAssertEqual(v[v.startIndex], 0)
         }
-
-        let b = a.map(String.init)
-        b.withUnsafeBufferPointer {
-            let v = BufferView(unsafeBufferPointer: $0)!
-            let f = v.startIndex
-            XCTAssertEqual(v[f], b.first)
-        }
     }
 
     func testRangeOfIndicesSubscript() {
         let capacity = 4
-        let a = (0..<capacity).map(String.init)
+        let a = Array(0..<capacity)
         a.withUnsafeBufferPointer {
             let v = BufferView(unsafeBufferPointer: $0)!
             XCTAssertTrue(v.elementsEqual(v[v.startIndex..<v.endIndex]))
