@@ -1671,7 +1671,6 @@ private final class DataTests {
 
     @available(FoundationSpan 6.2, *)
     @Test func inlineDataMutableSpan() throws {
-#if !canImport(Darwin) || FOUNDATION_FRAMEWORK
         var source = Data()
         var span = source.mutableSpan
         var isEmpty = span.isEmpty
@@ -1690,12 +1689,10 @@ private final class DataTests {
         var sub = span.extracting(i ..< i+1)
         sub.update(repeating: v)
         #expect(source[i] == v)
-#endif
     }
 
     @available(FoundationSpan 6.2, *)
     @Test func inlineSliceDataMutableSpan() throws {
-#if !canImport(Darwin) || FOUNDATION_FRAMEWORK
         var source = Data(0..<100)
         let count = source.count
         var span = source.mutableSpan
@@ -1704,7 +1701,6 @@ private final class DataTests {
         var sub = span.extracting(i..<i+1)
         sub.update(repeating: .max)
         #expect(source[i] == .max)
-#endif
     }
 
     @available(FoundationSpan 6.2, *)
