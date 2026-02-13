@@ -216,6 +216,7 @@ let package = Package(
                 .product(name: "SwiftParser", package: "swift-syntax"),
                 .product(name: "SwiftParserDiagnostics", package: "swift-syntax"),
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
+                .product(name: "SwiftIfConfig", package: "swift-syntax"),
             ],
             exclude: ["CMakeLists.txt"],
             swiftSettings: [
@@ -226,7 +227,14 @@ let package = Package(
         .testTarget(
             name: "FoundationMacrosTests",
             dependencies: [
-                "FoundationMacros"
+                "FoundationMacros",
+                .product(name: "SwiftSyntax", package: "swift-syntax"),
+                .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
+                .product(name: "SwiftSyntaxMacroExpansion", package: "swift-syntax"),
+                .product(name: "SwiftOperators", package: "swift-syntax"),
+                .product(name: "SwiftParser", package: "swift-syntax"),
+                .product(name: "SwiftParserDiagnostics", package: "swift-syntax"),
+                .product(name: "SwiftIfConfig", package: "swift-syntax"),
             ],
             swiftSettings: availabilityMacros + featureSettings + testOnlySwiftSettings
         )
